@@ -53,17 +53,20 @@ export function detectAnomaly(
     let score = 0;
     const reasons: string[] = [];
 
-    // 1. Hard Threshold: High spending for a student (Weighted: 40)
+    // 1. Hard Threshold: High spending for a student (Weighted: 45)
     if (amount > 50000) {
-        score += 40;
+        score += 45;
         reasons.push('Amount exceeds standard student limit (₹50k+)');
     }
 
     // 2. High-Risk Keywords (Weighted: 50)
-    const suspiciousKeywords = ['casino', 'gambling', 'crypto-scam', 'darkweb', 'betting', 'lottery'];
+    const suspiciousKeywords = [
+        'casino', 'gambling', 'crypto-scam', 'darkweb', 'betting', 'lottery',
+        'fast cash', 'win prize', 'investment fund', 'telegram bot', 'binary options', 'gift card buy'
+    ];
     if (suspiciousKeywords.some(kw => desc.includes(kw))) {
         score += 50;
-        reasons.push('High-risk keywords detected in description');
+        reasons.push('High-risk keywords or scam-related terms detected');
     }
 
     // 3. Duplicate Detection (Weighted: 60)
@@ -82,18 +85,39 @@ export function detectAnomaly(
     const hour = new Date(now).getHours();
     if (hour >= 1 && hour <= 5) {
         score += 30;
-        reasons.push('Transaction occurred at unusual late-night hours');
+        reasons.push('Transaction occurred during high-risk late-night hours (1 AM - 5 AM)');
     }
 
-    // 5. Velocity Check (Weighted: 45)
+    // 5. Velocity Check & Probing Pattern (Weighted: 55)
     const fifteenMinsAgo = now - (15 * 60 * 1000);
-    const recentCount = recentTransactions.filter(t => t.date > fifteenMinsAgo).length;
-    if (recentCount >= 3) {
-        score += 45;
-        reasons.push('High frequency of transactions in a short window');
+    const recentInWindow = recentTransactions.filter(t => t.date > fifteenMinsAgo);
+
+    if (recentInWindow.length >= 3) {
+        score += 40;
+        reasons.push('High frequency of transactions in a very short window');
+
+        // Detect "Probing": Multiple tiny transactions followed by a larger one
+        const smallTxCount = recentInWindow.filter(t => t.amount < 100).length;
+        if (smallTxCount >= 2 && amount >= 1000) {
+            score += 30;
+            reasons.push('Probing pattern detected: Small test amounts followed by a large transaction');
+        }
     }
 
-    // 6. Category Outlier Detection (Weighted: 35)
+    // 6. Round Number Detection (Weighted: 25)
+    // Large round numbers (10k, 25k, 50k) are often signs of manual fraud or "gift" scams
+    const isRoundNumber = amount > 5000 && (amount % 1000 === 0 || amount % 5000 === 0);
+    if (isRoundNumber) {
+        const histAvg = recentTransactions.length > 0
+            ? recentTransactions.reduce((s, t) => s + t.amount, 0) / recentTransactions.length
+            : 0;
+        if (amount > histAvg * 3) {
+            score += 25;
+            reasons.push('Unusually large round-number transaction (Potential "Gift" or Manual Scam)');
+        }
+    }
+
+    // 7. Category Outlier Detection (Weighted: 35)
     const categoryTx = recentTransactions.filter(t => t.category === category);
     if (categoryTx.length >= 3) {
         const avg = categoryTx.reduce((sum, t) => sum + t.amount, 0) / categoryTx.length;
@@ -103,12 +127,21 @@ export function detectAnomaly(
         }
     }
 
-    // 7. Behavior Profiling (Overall Outlier) (Weighted: 25)
+    // 8. Behavior Profiling (Overall Outlier) (Weighted: 30)
     if (recentTransactions.length >= 5) {
         const globalAvg = recentTransactions.reduce((sum, t) => sum + t.amount, 0) / recentTransactions.length;
         if (amount > globalAvg * 10) {
-            score += 25;
-            reasons.push('Massive deviation from overall spending habits');
+            score += 30;
+            reasons.push('Extreme deviation from overall spending habits');
+        }
+    }
+
+    // 9. Sequential Description Check (Weighted: 40)
+    if (recentTransactions.length >= 2) {
+        const lastDesc = recentTransactions[0].description.toLowerCase();
+        if (desc.includes('test') && lastDesc.includes('test')) {
+            score += 40;
+            reasons.push('Sequential "test" transactions detected');
         }
     }
 
@@ -117,11 +150,11 @@ export function detectAnomaly(
 
     // Classify Risk
     let riskLevel: 'Low' | 'Medium' | 'High' = 'Low';
-    if (finalScore >= 60) riskLevel = 'High';
-    else if (finalScore >= 30) riskLevel = 'Medium';
+    if (finalScore >= 70) riskLevel = 'High';
+    else if (finalScore >= 35) riskLevel = 'Medium';
 
     return {
-        isSuspicious: finalScore >= 30,
+        isSuspicious: finalScore >= 35,
         riskScore: finalScore,
         riskLevel,
         fraudReasons: reasons

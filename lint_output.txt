@@ -1,0 +1,21 @@
+
+> fintech-student-app@0.0.0 lint
+> eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0
+
+
+Oops! Something went wrong! :(
+
+ESLint: 8.57.1
+
+ESLint couldn't find the plugin "eslint-plugin-react-hooks".
+
+(The package "eslint-plugin-react-hooks" was not found when loaded as a Node module from the directory "C:\Users\Admin\Desktop\fintech".)
+
+It's likely that the plugin isn't installed correctly. Try reinstalling by running the following:
+
+    npm install eslint-plugin-react-hooks@latest --save-dev
+
+The plugin "eslint-plugin-react-hooks" was referenced from the config file in ".eslintrc.cjs".
+
+If you still can't figure out the problem, please stop by https://eslint.org/chat/help to chat with the team.
+

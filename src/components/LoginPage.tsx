@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, User, ArrowRight, ShieldCheck } from 'lucide-react';
 import { db, User as UserType } from '../db/storage';
+import { supabase } from '../db/supabase';
 
 interface LoginPageProps {
     onLogin: (user: UserType) => void;
@@ -22,12 +23,29 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
 
         try {
             if (isLogin) {
-                const user = await db.users.where('email').equals(email).first();
-                if (user && user.password === password) {
-                    onLogin(user);
-                } else {
-                    setError('Invalid email or password');
-                }
+                const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+                    email,
+                    password
+                });
+
+                if (authError) throw authError;
+
+                // Fetch profile
+                const { data: profileData, error: profileError } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', authData.user.id)
+                    .single();
+
+                if (profileError) throw profileError;
+
+                onLogin({
+                    id: authData.user.id,
+                    email: authData.user.email!,
+                    fullName: profileData.full_name,
+                    initialBalance: profileData.initial_balance,
+                    createdAt: new Date(authData.user.created_at).getTime()
+                } as any);
             } else {
                 if (!email || !password || !fullName) {
                     setError('All fields are required');
@@ -35,23 +53,37 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                     return;
                 }
 
-                const existing = await db.users.where('email').equals(email).first();
-                if (existing) {
-                    setError('Email already registered');
-                } else {
-                    const newUser: UserType = {
+                const { data: authData, error: authError } = await supabase.auth.signUp({
+                    email,
+                    password
+                });
+
+                if (authError) throw authError;
+
+                if (authData.user) {
+                    // Create profile
+                    const { error: profileError } = await supabase
+                        .from('profiles')
+                        .insert({
+                            id: authData.user.id,
+                            email,
+                            full_name: fullName,
+                            initial_balance: 30000
+                        });
+
+                    if (profileError) throw profileError;
+
+                    onLogin({
+                        id: authData.user.id,
                         email,
-                        password,
                         fullName,
                         initialBalance: 30000,
                         createdAt: Date.now()
-                    };
-                    const id = await db.users.add(newUser) as number;
-                    onLogin({ ...newUser, id });
+                    } as any);
                 }
             }
-        } catch (err) {
-            setError('An error occurred. Please try again.');
+        } catch (err: any) {
+            setError(err.message || 'An error occurred. Please try again.');
         } finally {
             setIsLoading(false);
         }

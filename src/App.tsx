@@ -33,11 +33,13 @@ import {
     Activity,
     GraduationCap,
     Gift,
-    Box
+    Box,
+    RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { autoCategorize, detectAnomaly } from './utils/intelligence';
 import LoginPage from './components/LoginPage';
+import { supabase } from './db/supabase';
 import { Pie } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 
@@ -62,7 +64,10 @@ const App = () => {
     // Form States
     const [description, setDescription] = useState('');
     const [amount, setAmount] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState('Other');
+    const [isManualCategory, setIsManualCategory] = useState(false);
     const [plannedDate, setPlannedDate] = useState('');
+    const [showDeduction, setShowDeduction] = useState<{ amount: string, visible: boolean }>({ amount: '', visible: false });
     const [budgetCategory, setBudgetCategory] = useState('');
     const [budgetLimitStr, setBudgetLimitStr] = useState('');
     const [groupName, setGroupName] = useState('');
@@ -73,8 +78,7 @@ const App = () => {
     const [billDescription, setBillDescription] = useState('');
     const [billAmount, setBillAmount] = useState('');
     const [billPaidBy, setBillPaidBy] = useState('');
-    const [selectedCategory, setSelectedCategory] = useState('Other');
-    const [isManualCategory, setIsManualCategory] = useState(false);
+
 
     const CATEGORIES = [
         { name: 'Food', icon: Utensils },
@@ -109,65 +113,143 @@ const App = () => {
     const loadAllData = async () => {
         if (!currentUser?.id) return;
 
-        const [tx, pp, bl, allGroups] = await Promise.all([
-            db.transactions.where('userId').equals(currentUser.id).toArray(),
-            db.plannedPayments.where('userId').equals(currentUser.id).toArray(),
-            db.budgets.where('userId').equals(currentUser.id).toArray(),
-            db.groups.toArray() // Fetch all groups
+        const [
+            { data: tx },
+            { data: pp },
+            { data: bl },
+            { data: allGroups }
+        ] = await Promise.all([
+            supabase.from('transactions').select('*').eq('user_id', currentUser.id),
+            supabase.from('planned_payments').select('*').eq('user_id', currentUser.id),
+            supabase.from('budgets').select('*').eq('user_id', currentUser.id),
+            supabase.from('groups').select('*, group_members(*), group_activity(*)')
         ]);
 
-        // Filter groups: show if user is creator OR member
-        const grp = allGroups.filter(group =>
-            group.userId === currentUser.id ||
-            group.members.some(member => member.email === currentUser.email)
-        );
+        // Map snake_case to camelCase for UI compatibility
+        const mappedTx = (tx || []).map((t: any) => ({
+            id: t.id,
+            userId: t.user_id,
+            amount: t.amount,
+            description: t.description,
+            category: t.category,
+            date: t.date,
+            isSuspicious: t.is_suspicious,
+            suspicionReason: t.suspicion_reason,
+            riskScore: t.risk_score,
+            riskLevel: t.risk_level,
+            fraudReasons: t.fraud_reasons
+        }));
 
-        // Sort manually for simplicity or use Dexie indices properly if preferred
-        setTransactions(tx.sort((a, b) => b.date - a.date));
-        setPlannedPayments(pp.sort((a, b) => a.date - b.date));
-        setBudgetLimits(bl);
-        setGroups(grp);
+        const mappedGroups = (allGroups || []).filter((g: any) =>
+            g.owner_id === currentUser.id ||
+            g.group_members.some((m: any) => m.user_email === currentUser.email || m.user_email === 'You')
+        ).map((g: any) => ({
+            id: g.id,
+            userId: g.owner_id,
+            name: g.name,
+            members: g.group_members.map((m: any) => ({ email: m.user_email, balance: m.balance })),
+            activity: g.group_activity.map((a: any) => ({
+                description: a.description,
+                amount: a.amount,
+                paidBy: a.paid_by_email,
+                date: a.date
+            }))
+        }));
+
+        setTransactions(mappedTx.sort((a, b) => b.date - a.date));
+        setPlannedPayments((pp || []).map((p: any) => ({
+            id: p.id,
+            userId: p.user_id,
+            description: p.description,
+            amount: p.amount,
+            date: p.date,
+            isCompleted: p.is_completed
+        })).sort((a, b) => a.date - b.date));
+        setBudgetLimits((bl || []).map((b: any) => ({
+            id: b.id,
+            userId: b.user_id,
+            category: b.category,
+            limit: b.amount_limit
+        })));
+        setGroups(mappedGroups);
     };
 
     const handleAddTransaction = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!currentUser || !description || !amount) return;
+        if (!currentUser || !amount) return;
+
 
         const numAmount = parseFloat(amount);
         const finalDescription = description.trim() || selectedCategory;
         const anomaly = detectAnomaly(numAmount, finalDescription, transactions);
 
-        await db.transactions.add({
-            userId: currentUser.id!,
+        const { error } = await supabase.from('transactions').insert({
+            user_id: currentUser.id!,
             description: finalDescription,
             amount: numAmount,
             date: Date.now(),
             category: selectedCategory,
-            isSuspicious: anomaly.isSuspicious,
-            suspicionReason: anomaly.fraudReasons.join(', '),
-            riskScore: anomaly.riskScore,
-            riskLevel: anomaly.riskLevel,
-            fraudReasons: anomaly.fraudReasons
+            is_suspicious: anomaly.isSuspicious,
+            suspicion_reason: anomaly.fraudReasons.join(', '),
+            risk_score: anomaly.riskScore,
+            risk_level: anomaly.riskLevel,
+            fraud_reasons: anomaly.fraudReasons
         });
+
+        if (error) {
+            alert('Failed to add transaction: ' + error.message);
+            return;
+        }
+
+        setShowAddForm(false);
+        setShowDeduction({ amount, visible: true });
+        setTimeout(() => setShowDeduction({ amount: '', visible: false }), 2000);
 
         setDescription('');
         setAmount('');
         setSelectedCategory('Other');
         setIsManualCategory(false);
-        setShowAddForm(false);
+        loadAllData();
+    };
+
+
+    const handleDeleteTransaction = async (id: number) => {
+        if (!confirm('Are you sure you want to roll back this transaction?')) return;
+
+        const { error } = await supabase.from('transactions').delete().eq('id', id);
+        if (error) {
+            alert('Failed to delete: ' + error.message);
+            return;
+        }
+        loadAllData();
+    };
+
+    const handleClearAllTransactions = async () => {
+        if (!currentUser) return;
+        if (!confirm('This will permanently delete ALL your transactions. Proceed?')) return;
+
+        const { error } = await supabase.from('transactions').delete().eq('user_id', currentUser.id);
+        if (error) {
+            alert('Failed to clear: ' + error.message);
+            return;
+        }
         loadAllData();
     };
 
     const handleAddPlanned = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!currentUser || !description || !amount || !plannedDate) return;
-        await db.plannedPayments.add({
-            userId: currentUser.id!,
+
+        const { error } = await supabase.from('planned_payments').insert({
+            user_id: currentUser.id!,
             description,
             amount: parseFloat(amount),
             date: new Date(plannedDate).getTime(),
-            isCompleted: false
+            is_completed: false
         });
+
+        if (error) alert(error.message);
+
         setDescription('');
         setAmount('');
         setPlannedDate('');
@@ -180,12 +262,14 @@ const App = () => {
 
         const existing = budgetLimits.find(b => b.category === budgetCategory);
         if (existing) {
-            await db.budgets.update(existing.id!, { limit: parseFloat(budgetLimitStr) });
+            await supabase.from('budgets')
+                .update({ amount_limit: parseFloat(budgetLimitStr) })
+                .eq('id', existing.id);
         } else {
-            await db.budgets.add({
-                userId: currentUser.id!,
+            await supabase.from('budgets').insert({
+                user_id: currentUser.id!,
                 category: budgetCategory,
-                limit: parseFloat(budgetLimitStr)
+                amount_limit: parseFloat(budgetLimitStr)
             });
         }
         setBudgetCategory('');
@@ -200,8 +284,16 @@ const App = () => {
         const newBal = parseFloat(balanceInput);
         if (isNaN(newBal)) return;
 
-        await db.users.update(currentUser.id!, { initialBalance: newBal });
-        setCurrentUser({ ...currentUser, initialBalance: newBal });
+        const { error } = await supabase.from('profiles')
+            .update({ initial_balance: newBal })
+            .eq('id', currentUser.id);
+
+        if (error) {
+            alert(error.message);
+            return;
+        }
+
+        setCurrentUser({ ...currentUser, initialBalance: newBal } as any);
         setShowBalanceModal(false);
         setBalanceInput('');
         loadAllData();
@@ -211,18 +303,38 @@ const App = () => {
         e.preventDefault();
         if (!currentUser || !groupName || groupMembers.length === 0) return;
 
-        // Add current user as a member
-        const allMembers = [...new Set(['You', ...groupMembers])];
+        // Use currentUser.email instead of 'You' for the creator
+        const allUsers = [...new Set([currentUser.email, ...groupMembers])];
 
-        await db.groups.add({
-            userId: currentUser.id!,
-            name: groupName,
-            members: allMembers.map(email => ({ email, balance: 0 })),
-            activity: []
-        });
-        setGroupName('');
-        setGroupMembers([]);
-        loadAllData();
+        try {
+            const { data: group, error: groupError } = await supabase.from('groups').insert({
+                owner_id: currentUser.id!,
+                name: groupName
+            }).select().single();
+
+            if (groupError || !group) {
+                alert(groupError?.message || 'Failed to create group');
+                return;
+            }
+
+            const { error: memberError } = await supabase.from('group_members').insert(
+                allUsers.map(email => ({
+                    group_id: group.id,
+                    user_email: email,
+                    balance: 0
+                }))
+            );
+
+            if (memberError) {
+                alert('Member error: ' + memberError.message);
+            }
+
+            setGroupName('');
+            setGroupMembers([]);
+            loadAllData();
+        } catch (err: any) {
+            alert('Error creating group: ' + err.message);
+        }
     };
 
     const handleAddGroupBill = async (e: React.FormEvent) => {
@@ -235,43 +347,75 @@ const App = () => {
         const amountNum = parseFloat(billAmount);
         const splitAmount = amountNum / group.members.length;
 
-        const updatedMembers = group.members.map(m => {
-            let newBalance = m.balance;
-            if (m.email === billPaidBy) {
-                newBalance += (amountNum - splitAmount);
-            } else {
-                newBalance -= splitAmount;
+        try {
+            const promises: any[] = [];
+
+            // Update balances in Supabase
+            group.members.forEach(m => {
+                let newBalance = m.balance;
+                if (m.email === billPaidBy) {
+                    newBalance += (amountNum - splitAmount);
+                } else {
+                    newBalance -= splitAmount;
+                }
+                promises.push(
+                    supabase
+                        .from('group_members')
+                        .update({ balance: newBalance })
+                        .eq('group_id', selectedGroupId)
+                        .eq('user_email', m.email)
+                );
+            });
+
+            // Add activity in Supabase
+            promises.push(
+                supabase.from('group_activity').insert({
+                    group_id: selectedGroupId,
+                    description: billDescription,
+                    amount: amountNum,
+                    paid_by_email: billPaidBy,
+                    date: Date.now()
+                })
+            );
+
+            // If the current user paid, add it as a transaction to deduct from their wallet
+            if (billPaidBy === currentUser.email) {
+                promises.push(
+                    supabase.from('transactions').insert({
+                        user_id: currentUser.id!,
+                        description: `Group Bill: ${billDescription}`,
+                        amount: amountNum,
+                        date: Date.now(),
+                        category: 'Other',
+                        is_suspicious: false
+                    })
+                );
             }
-            return { ...m, balance: newBalance };
-        });
 
-        const newActivity = [
-            {
-                description: billDescription,
-                amount: amountNum,
-                paidBy: billPaidBy,
-                date: Date.now()
-            },
-            ...group.activity
-        ].slice(0, 10);
+            const results = await Promise.all(promises);
+            const errors = results.filter(r => r.error).map(r => r.error!.message);
 
-        await db.groups.update(selectedGroupId, {
-            members: updatedMembers,
-            activity: newActivity
-        });
+            if (errors.length > 0) {
+                alert('Errors occurred: ' + errors.join(', '));
+            }
 
-        setBillDescription('');
-        setBillAmount('');
-        loadAllData();
+            setBillDescription('');
+            setBillAmount('');
+            loadAllData();
+        } catch (err: any) {
+            alert('Error adding group bill: ' + err.message);
+        }
     };
 
     const togglePlannedComplete = async (payment: PlannedPayment) => {
-        await db.plannedPayments.update(payment.id!, { isCompleted: !payment.isCompleted });
+        await supabase.from('planned_payments')
+            .update({ is_completed: !payment.isCompleted })
+            .eq('id', payment.id);
         loadAllData();
     };
 
     const deletePlanned = async (id: number) => {
-        await db.plannedPayments.delete(id);
+        await supabase.from('planned_payments').delete().eq('id', id);
         loadAllData();
     };
 
@@ -336,7 +480,32 @@ const App = () => {
                 </div>
             </header>
 
+            <AnimatePresence>
+                {showDeduction.visible && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.5, y: 20 }}
+                        animate={{ opacity: 1, scale: 1.2, y: -100 }}
+                        exit={{ opacity: 0, scale: 0.8, y: -200 }}
+                        style={{
+                            position: 'fixed',
+                            left: '50%',
+                            top: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            color: 'var(--danger)',
+                            fontSize: '3rem',
+                            fontWeight: 'bold',
+                            zIndex: 2000,
+                            pointerEvents: 'none',
+                            textShadow: '0 0 20px rgba(255, 77, 77, 0.4)'
+                        }}
+                    >
+                        -₹{parseFloat(showDeduction.amount).toLocaleString('en-IN')}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             <main style={{ padding: '16px' }}>
+
                 <AnimatePresence mode="wait">
                     {activeTab === 'home' && (
                         <motion.div
@@ -472,8 +641,25 @@ const App = () => {
                                 <button onClick={() => setActiveTab('home')} style={{ background: 'rgba(255,255,255,0.05)', padding: '8px', borderRadius: '10px', border: 'none', color: 'white' }}>
                                     <ChevronRight size={18} style={{ transform: 'rotate(180deg)' }} />
                                 </button>
-                                <h2 style={{ fontSize: '1.4rem' }}>All Transactions</h2>
+                                <h2 style={{ fontSize: '1.4rem', flex: 1 }}>All Transactions</h2>
+                                {transactions.length > 0 && (
+                                    <button
+                                        onClick={handleClearAllTransactions}
+                                        style={{
+                                            background: 'rgba(239, 68, 68, 0.1)',
+                                            border: '1px solid rgba(239, 68, 68, 0.2)',
+                                            color: '#ef4444',
+                                            padding: '6px 12px',
+                                            borderRadius: '8px',
+                                            fontSize: '0.75rem',
+                                            fontWeight: '600'
+                                        }}
+                                    >
+                                        Clear All
+                                    </button>
+                                )}
                             </div>
+
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                 {transactions.map((t, i) => (
                                     <motion.div
@@ -493,10 +679,20 @@ const App = () => {
                                                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(t.date).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
                                             </div>
                                         </div>
-                                        <div style={{ textAlign: 'right' }}>
-                                            <p style={{ fontWeight: '700' }}>-₹{t.amount.toFixed(2)}</p>
-                                            <span style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', color: 'var(--text-muted)' }}>{t.category}</span>
+                                        <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div>
+                                                <p style={{ fontWeight: '700' }}>-₹{t.amount.toFixed(2)}</p>
+                                                <span style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', color: 'var(--text-muted)' }}>{t.category}</span>
+                                            </div>
+                                            <button
+                                                onClick={() => handleDeleteTransaction(t.id!)}
+                                                style={{ background: 'none', border: 'none', color: 'var(--danger)', opacity: 0.5, padding: '4px' }}
+                                                title="Roll back transaction"
+                                            >
+                                                <RotateCcw size={16} />
+                                            </button>
                                         </div>
+
                                     </motion.div>
                                 ))}
                             </div>
