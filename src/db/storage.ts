@@ -16,6 +16,7 @@ export interface Transaction {
     riskScore?: number; // 0-100
     riskLevel?: 'Low' | 'Medium' | 'High';
     fraudReasons?: string[];
+    mlConfidence?: number;
     encrypted?: string; // For data privacy-first local storage
 }
 

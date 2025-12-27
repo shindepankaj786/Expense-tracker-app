@@ -66,6 +66,12 @@ select {
   font-size: 1rem;
 }
 
+/* Fix for white dropdown options on Windows */
+option {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
 input:focus {
   outline: none;
   border-color: var(--primary);

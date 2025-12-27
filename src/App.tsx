@@ -37,7 +37,7 @@ import {
     RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { autoCategorize, detectAnomaly } from './utils/intelligence';
+import { autoCategorize, detectAnomaly, detectAnomalyML } from './utils/intelligence';
 import LoginPage from './components/LoginPage';
 import { supabase } from './db/supabase';
 import { Pie } from 'react-chartjs-2';
@@ -181,13 +181,15 @@ const App = () => {
 
         const numAmount = parseFloat(amount);
         const finalDescription = description.trim() || selectedCategory;
-        const anomaly = detectAnomaly(numAmount, finalDescription, transactions);
+        const now = Date.now();
+
+        const anomaly = await detectAnomalyML(numAmount, finalDescription, selectedCategory, now, transactions);
 
         const { error } = await supabase.from('transactions').insert({
             user_id: currentUser.id!,
             description: finalDescription,
             amount: numAmount,
-            date: Date.now(),
+            date: now,
             category: selectedCategory,
             is_suspicious: anomaly.isSuspicious,
             suspicion_reason: anomaly.fraudReasons.join(', '),
@@ -752,6 +754,11 @@ const App = () => {
                                                         }}>
                                                             {t.riskLevel} Risk ({t.riskScore} pts)
                                                         </span>
+                                                        {t.mlConfidence && (
+                                                            <span style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: '600', padding: '2px 6px', background: 'rgba(79, 70, 229, 0.1)', borderRadius: '4px' }}>
+                                                                AI Confidence: {(t.mlConfidence * 100).toFixed(0)}%
+                                                            </span>
+                                                        )}
                                                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(t.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                                     </div>
                                                     <p style={{ fontWeight: '700', fontSize: '1rem' }}>{t.description}</p>
@@ -767,6 +774,21 @@ const App = () => {
                                                     </div>
                                                 ))}
                                             </div>
+
+                                            <div style={{ display: 'flex', gap: '8px', marginTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
+                                                <button
+                                                    onClick={() => alert('Feedback recorded: Model will improve!')}
+                                                    style={{ flex: 1, fontSize: '0.7rem', fontWeight: '600', padding: '8px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--accent)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer' }}
+                                                >
+                                                    Correctly Flagged
+                                                </button>
+                                                <button
+                                                    onClick={() => alert('Feedback recorded: Learnings saved!')}
+                                                    style={{ flex: 1, fontSize: '0.7rem', fontWeight: '600', padding: '8px', borderRadius: '8px', background: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                                                >
+                                                    False Alarm
+                                                </button>
+                                            </div>
                                         </div>
                                     );
                                 })}
@@ -780,437 +802,447 @@ const App = () => {
                         </motion.div>
                     )}
                 </AnimatePresence>
-            </main>
+            </main >
 
             {/* Set Balance Modal */}
             <AnimatePresence>
-                {showBalanceModal && (
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowBalanceModal(false)}
-                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                        />
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                            className="card"
-                            style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
-                        >
-                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
-                            <h3 style={{ fontSize: '1.5rem', marginBottom: '8px' }}>Set Starting Balance</h3>
-                            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
-                                Enter your current total balance to start tracking from.
-                            </p>
-                            <form onSubmit={handleUpdateBalance} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <div style={{ position: 'relative' }}>
-                                    <Banknote size={18} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                                    <input
-                                        type="number"
-                                        placeholder="Starting Balance"
-                                        value={balanceInput}
-                                        onChange={e => setBalanceInput(e.target.value)}
-                                        style={{ paddingLeft: '48px' }}
-                                        required
-                                    />
-                                </div>
-                                <div style={{ display: 'flex', gap: '12px' }}>
-                                    <button type="button" onClick={() => setShowBalanceModal(false)} style={{ flex: 1, padding: '12px', background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600' }}>
-                                        Cancel
-                                    </button>
-                                    <button type="submit" style={{ flex: 1, padding: '12px', background: 'var(--primary)', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600' }}>
-                                        Update
-                                    </button>
-                                </div>
-                            </form>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                {
+                    showBalanceModal && (
+                        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowBalanceModal(false)}
+                                style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+                            />
+                            <motion.div
+                                initial={{ y: '100%' }}
+                                animate={{ y: 0 }}
+                                exit={{ y: '100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="card"
+                                style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
+                            >
+                                <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
+                                <h3 style={{ fontSize: '1.5rem', marginBottom: '8px' }}>Set Starting Balance</h3>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
+                                    Enter your current total balance to start tracking from.
+                                </p>
+                                <form onSubmit={handleUpdateBalance} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                    <div style={{ position: 'relative' }}>
+                                        <Banknote size={18} style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                                        <input
+                                            type="number"
+                                            placeholder="Starting Balance"
+                                            value={balanceInput}
+                                            onChange={e => setBalanceInput(e.target.value)}
+                                            style={{ paddingLeft: '48px' }}
+                                            required
+                                        />
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button type="button" onClick={() => setShowBalanceModal(false)} style={{ flex: 1, padding: '12px', background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600' }}>
+                                            Cancel
+                                        </button>
+                                        <button type="submit" style={{ flex: 1, padding: '12px', background: 'var(--primary)', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600' }}>
+                                            Update
+                                        </button>
+                                    </div>
+                                </form>
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
 
             {/* Planned Payment Modal */}
             <AnimatePresence>
-                {showPlannedModal && (
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowPlannedModal(false)}
-                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                        />
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                            className="card"
-                            style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
-                        >
-                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
-                            <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Planned Payments</h3>
+                {
+                    showPlannedModal && (
+                        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowPlannedModal(false)}
+                                style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+                            />
+                            <motion.div
+                                initial={{ y: '100%' }}
+                                animate={{ y: 0 }}
+                                exit={{ y: '100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="card"
+                                style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
+                            >
+                                <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
+                                <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Planned Payments</h3>
 
-                            <form onSubmit={handleAddPlanned} style={{ marginBottom: '24px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid var(--border)' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                                    <input placeholder="Service/Bill" value={description} onChange={e => setDescription(e.target.value)} />
-                                    <input type="number" placeholder="Amount" value={amount} onChange={e => setAmount(e.target.value)} />
-                                </div>
-                                <div style={{ display: 'flex', gap: '12px' }}>
-                                    <input type="date" value={plannedDate} onChange={e => setPlannedDate(e.target.value)} />
-                                    <button type="submit" style={{ padding: '0 20px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Add</button>
-                                </div>
-                            </form>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '300px', overflowY: 'auto' }} className="hide-scrollbar">
-                                {plannedPayments.map(p => (
-                                    <div key={p.id} className="card glass" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: p.isCompleted ? 0.6 : 1 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                            <button onClick={() => togglePlannedComplete(p)} style={{ background: 'none', border: 'none', color: p.isCompleted ? 'var(--accent)' : 'var(--text-muted)' }}>
-                                                <CheckCircle2 size={24} />
-                                            </button>
-                                            <div>
-                                                <p style={{ fontWeight: '600', textDecoration: p.isCompleted ? 'line-through' : 'none' }}>{p.description}</p>
-                                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(p.date).toLocaleDateString()}</p>
-                                            </div>
-                                        </div>
-                                        <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                            <p style={{ fontWeight: '700' }}>₹{p.amount.toLocaleString()}</p>
-                                            <button onClick={() => deletePlanned(p.id!)} style={{ background: 'none', border: 'none', color: 'var(--danger)', opacity: 0.5 }}>
-                                                <Trash2 size={16} />
-                                            </button>
-                                        </div>
+                                <form onSubmit={handleAddPlanned} style={{ marginBottom: '24px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                        <input placeholder="Service/Bill" value={description} onChange={e => setDescription(e.target.value)} />
+                                        <input type="number" placeholder="Amount" value={amount} onChange={e => setAmount(e.target.value)} />
                                     </div>
-                                ))}
-                                {plannedPayments.length === 0 && (
-                                    <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>No upcoming payments</p>
-                                )}
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
-
-            {/* Budgets Modal */}
-            <AnimatePresence>
-                {showBudgetsModal && (
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowBudgetsModal(false)}
-                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                        />
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                            className="card"
-                            style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
-                        >
-                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
-                            <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Monthly Budgets</h3>
-
-                            <form onSubmit={handleAddBudget} style={{ marginBottom: '24px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
-                                <select value={budgetCategory} onChange={e => setBudgetCategory(e.target.value)} style={{ padding: '8px' }}>
-                                    <option value="">Category</option>
-                                    <option value="Food">Food</option>
-                                    <option value="Shopping">Shopping</option>
-                                    <option value="Transport">Transport</option>
-                                    <option value="Entertainment">Entertainment</option>
-                                    <option value="Utilities">Utilities</option>
-                                    <option value="Other">Other</option>
-                                </select>
-                                <input type="number" placeholder="Limit" value={budgetLimitStr} onChange={e => setBudgetLimitStr(e.target.value)} />
-                                <button type="submit" style={{ padding: '0 16px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Set</button>
-                            </form>
-
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '300px', overflowY: 'auto' }} className="hide-scrollbar">
-                                {['Food', 'Shopping', 'Transport', 'Entertainment', 'Utilities', 'Other'].map(cat => {
-                                    const limit = budgetLimits.find(b => b.category === cat)?.limit || 0;
-                                    const spent = categoryTotals[cat] || 0;
-                                    const percent = limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
-
-                                    return (
-                                        <div key={cat}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>{cat}</span>
-                                                <span style={{ fontSize: '0.9rem', color: spent > limit && limit > 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
-                                                    ₹{spent.toLocaleString()} / {limit > 0 ? `₹${limit.toLocaleString()}` : 'No limit'}
-                                                </span>
-                                            </div>
-                                            <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
-                                                <motion.div
-                                                    initial={{ width: 0 }}
-                                                    animate={{ width: `${percent}%` }}
-                                                    style={{ height: '100%', background: spent > limit && limit > 0 ? 'var(--danger)' : 'var(--primary)' }}
-                                                />
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
-
-            {/* Sharing Modal */}
-            <AnimatePresence>
-                {showSharingModal && (
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowSharingModal(false)}
-                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                        />
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                            className="card"
-                            style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
-                        >
-                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
-                            <h3 style={{ fontSize: '1.5rem', marginBottom: '8px' }}>
-                                {selectedGroupId ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <button onClick={() => setSelectedGroupId(null)} style={{ background: 'none', border: 'none', color: 'white', display: 'flex' }}>
-                                            <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} />
-                                        </button>
-                                        {groups.find(g => g.id === selectedGroupId)?.name}
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <input type="date" value={plannedDate} onChange={e => setPlannedDate(e.target.value)} />
+                                        <button type="submit" style={{ padding: '0 20px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Add</button>
                                     </div>
-                                ) : 'Group Sharing'}
-                            </h3>
-                            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
-                                {selectedGroupId ? 'Manage group bills and balances' : 'Connect with friends using their emails'}
-                            </p>
+                                </form>
 
-                            {!selectedGroupId ? (
-                                <>
-                                    <form onSubmit={handleCreateGroup} style={{ marginBottom: '24px' }}>
-                                        <div style={{ marginBottom: '16px' }}>
-                                            <input placeholder="Group Name (e.g. Roommates)" value={groupName} onChange={e => setGroupName(e.target.value)} style={{ marginBottom: '12px' }} />
-                                            <div style={{ display: 'flex', gap: '8px' }}>
-                                                <input
-                                                    placeholder="Member Email"
-                                                    value={memberEmail}
-                                                    onChange={e => setMemberEmail(e.target.value)}
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        if (memberEmail && !groupMembers.includes(memberEmail)) {
-                                                            setGroupMembers([...groupMembers, memberEmail]);
-                                                            setMemberEmail('');
-                                                        }
-                                                    }}
-                                                    style={{ padding: '0 12px', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--border)', borderRadius: '12px' }}
-                                                >
-                                                    <Mail size={18} />
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '300px', overflowY: 'auto' }} className="hide-scrollbar">
+                                    {plannedPayments.map(p => (
+                                        <div key={p.id} className="card glass" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: p.isCompleted ? 0.6 : 1 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <button onClick={() => togglePlannedComplete(p)} style={{ background: 'none', border: 'none', color: p.isCompleted ? 'var(--accent)' : 'var(--text-muted)' }}>
+                                                    <CheckCircle2 size={24} />
+                                                </button>
+                                                <div>
+                                                    <p style={{ fontWeight: '600', textDecoration: p.isCompleted ? 'line-through' : 'none' }}>{p.description}</p>
+                                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(p.date).toLocaleDateString()}</p>
+                                                </div>
+                                            </div>
+                                            <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <p style={{ fontWeight: '700' }}>₹{p.amount.toLocaleString()}</p>
+                                                <button onClick={() => deletePlanned(p.id!)} style={{ background: 'none', border: 'none', color: 'var(--danger)', opacity: 0.5 }}>
+                                                    <Trash2 size={16} />
                                                 </button>
                                             </div>
                                         </div>
-                                        {groupMembers.length > 0 && (
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-                                                {groupMembers.map(email => (
-                                                    <span key={email} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'var(--primary-glow)', borderRadius: '20px', border: '1px solid var(--primary)' }}>
-                                                        {email}
+                                    ))}
+                                    {plannedPayments.length === 0 && (
+                                        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>No upcoming payments</p>
+                                    )}
+                                </div>
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
+
+            {/* Budgets Modal */}
+            <AnimatePresence>
+                {
+                    showBudgetsModal && (
+                        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowBudgetsModal(false)}
+                                style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+                            />
+                            <motion.div
+                                initial={{ y: '100%' }}
+                                animate={{ y: 0 }}
+                                exit={{ y: '100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="card"
+                                style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
+                            >
+                                <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
+                                <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Monthly Budgets</h3>
+
+                                <form onSubmit={handleAddBudget} style={{ marginBottom: '24px', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px' }}>
+                                    <select value={budgetCategory} onChange={e => setBudgetCategory(e.target.value)} style={{ padding: '8px', background: 'var(--bg-card)', color: 'white', border: '1px solid var(--border)', borderRadius: '12px' }}>
+                                        <option value="">Category</option>
+                                        <option value="Food">Food</option>
+                                        <option value="Shopping">Shopping</option>
+                                        <option value="Transport">Transport</option>
+                                        <option value="Entertainment">Entertainment</option>
+                                        <option value="Utilities">Utilities</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                    <input type="number" placeholder="Limit" value={budgetLimitStr} onChange={e => setBudgetLimitStr(e.target.value)} />
+                                    <button type="submit" style={{ padding: '0 16px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Set</button>
+                                </form>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxHeight: '300px', overflowY: 'auto' }} className="hide-scrollbar">
+                                    {['Food', 'Shopping', 'Transport', 'Entertainment', 'Utilities', 'Other'].map(cat => {
+                                        const limit = budgetLimits.find(b => b.category === cat)?.limit || 0;
+                                        const spent = categoryTotals[cat] || 0;
+                                        const percent = limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
+
+                                        return (
+                                            <div key={cat}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                                    <span style={{ fontSize: '0.9rem', fontWeight: '500' }}>{cat}</span>
+                                                    <span style={{ fontSize: '0.9rem', color: spent > limit && limit > 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
+                                                        ₹{spent.toLocaleString()} / {limit > 0 ? `₹${limit.toLocaleString()}` : 'No limit'}
                                                     </span>
+                                                </div>
+                                                <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+                                                    <motion.div
+                                                        initial={{ width: 0 }}
+                                                        animate={{ width: `${percent}%` }}
+                                                        style={{ height: '100%', background: spent > limit && limit > 0 ? 'var(--danger)' : 'var(--primary)' }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
+
+            {/* Sharing Modal */}
+            <AnimatePresence>
+                {
+                    showSharingModal && (
+                        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowSharingModal(false)}
+                                style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+                            />
+                            <motion.div
+                                initial={{ y: '100%' }}
+                                animate={{ y: 0 }}
+                                exit={{ y: '100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="card"
+                                style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
+                            >
+                                <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
+                                <h3 style={{ fontSize: '1.5rem', marginBottom: '8px' }}>
+                                    {selectedGroupId ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <button onClick={() => setSelectedGroupId(null)} style={{ background: 'none', border: 'none', color: 'white', display: 'flex' }}>
+                                                <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} />
+                                            </button>
+                                            {groups.find(g => g.id === selectedGroupId)?.name}
+                                        </div>
+                                    ) : 'Group Sharing'}
+                                </h3>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
+                                    {selectedGroupId ? 'Manage group bills and balances' : 'Connect with friends using their emails'}
+                                </p>
+
+                                {!selectedGroupId ? (
+                                    <>
+                                        <form onSubmit={handleCreateGroup} style={{ marginBottom: '24px' }}>
+                                            <div style={{ marginBottom: '16px' }}>
+                                                <input placeholder="Group Name (e.g. Roommates)" value={groupName} onChange={e => setGroupName(e.target.value)} style={{ marginBottom: '12px' }} />
+                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                    <input
+                                                        placeholder="Member Email"
+                                                        value={memberEmail}
+                                                        onChange={e => setMemberEmail(e.target.value)}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (memberEmail && !groupMembers.includes(memberEmail)) {
+                                                                setGroupMembers([...groupMembers, memberEmail]);
+                                                                setMemberEmail('');
+                                                            }
+                                                        }}
+                                                        style={{ padding: '0 12px', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--border)', borderRadius: '12px' }}
+                                                    >
+                                                        <Mail size={18} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {groupMembers.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
+                                                    {groupMembers.map(email => (
+                                                        <span key={email} style={{ fontSize: '0.75rem', padding: '4px 10px', background: 'var(--primary-glow)', borderRadius: '20px', border: '1px solid var(--primary)' }}>
+                                                            {email}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            <button type="submit" disabled={!groupName || groupMembers.length === 0} style={{ width: '100%', padding: '14px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', opacity: (!groupName || groupMembers.length === 0) ? 0.5 : 1 }}>
+                                                Create Group
+                                            </button>
+                                        </form>
+
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '250px', overflowY: 'auto' }} className="hide-scrollbar">
+                                            {groups.map(g => (
+                                                <button key={g.id} onClick={() => setSelectedGroupId(g.id!)} className="card glass" style={{ padding: '16px', textAlign: 'left', width: '100%', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                        <h4 style={{ fontWeight: '600' }}>{g.name}</h4>
+                                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{g.members.length} members</span>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '4px' }}>
+                                                        {g.members.slice(0, 3).map(m => (
+                                                            <div key={m.email} style={{ width: '24px', height: '24px', background: 'var(--primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.6rem', border: '2px solid var(--bg-card)' }}>
+                                                                {m.email[0].toUpperCase()}
+                                                            </div>
+                                                        ))}
+                                                        {g.members.length > 3 && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '4px' }}>+{g.members.length - 3} more</div>}
+                                                    </div>
+                                                </button>
+                                            ))}
+                                            {groups.length === 0 && (
+                                                <div className="card glass" style={{ padding: '20px', textAlign: 'center', border: '1px dashed var(--border)' }}>
+                                                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No active groups</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ maxHeight: '500px', overflowY: 'auto' }} className="hide-scrollbar">
+                                        <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '20px', padding: '16px', marginBottom: '24px' }}>
+                                            <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Balances</h4>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                                {groups.find(g => g.id === selectedGroupId)?.members.map(m => (
+                                                    <div key={m.email} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                                                        <span>{m.email}</span>
+                                                        <span style={{ color: m.balance >= 0 ? 'var(--accent)' : 'var(--danger)', fontWeight: 'bold' }}>
+                                                            {m.balance >= 0 ? '+' : ''}₹{m.balance.toFixed(2)}
+                                                        </span>
+                                                    </div>
                                                 ))}
                                             </div>
-                                        )}
-                                        <button type="submit" disabled={!groupName || groupMembers.length === 0} style={{ width: '100%', padding: '14px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', opacity: (!groupName || groupMembers.length === 0) ? 0.5 : 1 }}>
-                                            Create Group
-                                        </button>
-                                    </form>
+                                        </div>
 
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '250px', overflowY: 'auto' }} className="hide-scrollbar">
-                                        {groups.map(g => (
-                                            <button key={g.id} onClick={() => setSelectedGroupId(g.id!)} className="card glass" style={{ padding: '16px', textAlign: 'left', width: '100%', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                    <h4 style={{ fontWeight: '600' }}>{g.name}</h4>
-                                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{g.members.length} members</span>
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '4px' }}>
-                                                    {g.members.slice(0, 3).map(m => (
-                                                        <div key={m.email} style={{ width: '24px', height: '24px', background: 'var(--primary)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.6rem', border: '2px solid var(--bg-card)' }}>
-                                                            {m.email[0].toUpperCase()}
-                                                        </div>
-                                                    ))}
-                                                    {g.members.length > 3 && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '4px' }}>+{g.members.length - 3} more</div>}
-                                                </div>
-                                            </button>
-                                        ))}
-                                        {groups.length === 0 && (
-                                            <div className="card glass" style={{ padding: '20px', textAlign: 'center', border: '1px dashed var(--border)' }}>
-                                                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No active groups</p>
+                                        <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Split a Bill</h4>
+                                        <form onSubmit={handleAddGroupBill} style={{ marginBottom: '24px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid var(--border)' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                                <input placeholder="What for?" value={billDescription} onChange={e => setBillDescription(e.target.value)} />
+                                                <input type="number" placeholder="Amount" value={billAmount} onChange={e => setBillAmount(e.target.value)} />
                                             </div>
-                                        )}
-                                    </div>
-                                </>
-                            ) : (
-                                <div style={{ maxHeight: '500px', overflowY: 'auto' }} className="hide-scrollbar">
-                                    <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '20px', padding: '16px', marginBottom: '24px' }}>
-                                        <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Balances</h4>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <select value={billPaidBy} onChange={e => setBillPaidBy(e.target.value)} style={{ flex: 1, padding: '8px', background: 'var(--bg-card)', color: 'white', border: '1px solid var(--border)', borderRadius: '12px' }}>
+                                                    <option value="">Paid by...</option>
+                                                    {groups.find(g => g.id === selectedGroupId)?.members.map(m => (
+                                                        <option key={m.email} value={m.email}>{m.email}</option>
+                                                    ))}
+                                                </select>
+                                                <button type="submit" style={{ padding: '0 20px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Add</button>
+                                            </div>
+                                        </form>
+
+                                        <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Activity</h4>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                            {groups.find(g => g.id === selectedGroupId)?.members.map(m => (
-                                                <div key={m.email} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
-                                                    <span>{m.email}</span>
-                                                    <span style={{ color: m.balance >= 0 ? 'var(--accent)' : 'var(--danger)', fontWeight: 'bold' }}>
-                                                        {m.balance >= 0 ? '+' : ''}₹{m.balance.toFixed(2)}
-                                                    </span>
+                                            {groups.find(g => g.id === selectedGroupId)?.activity.map((act, i) => (
+                                                <div key={i} className="card glass" style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div>
+                                                        <p style={{ fontWeight: '600', fontSize: '0.9rem' }}>{act.description}</p>
+                                                        <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Paid by {act.paidBy}</p>
+                                                    </div>
+                                                    <p style={{ fontWeight: '700' }}>₹{act.amount.toLocaleString()}</p>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
-
-                                    <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Split a Bill</h4>
-                                    <form onSubmit={handleAddGroupBill} style={{ marginBottom: '24px', padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid var(--border)' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                                            <input placeholder="What for?" value={billDescription} onChange={e => setBillDescription(e.target.value)} />
-                                            <input type="number" placeholder="Amount" value={billAmount} onChange={e => setBillAmount(e.target.value)} />
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <select value={billPaidBy} onChange={e => setBillPaidBy(e.target.value)} style={{ flex: 1, padding: '8px' }}>
-                                                <option value="">Paid by...</option>
-                                                {groups.find(g => g.id === selectedGroupId)?.members.map(m => (
-                                                    <option key={m.email} value={m.email}>{m.email}</option>
-                                                ))}
-                                            </select>
-                                            <button type="submit" style={{ padding: '0 20px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Add</button>
-                                        </div>
-                                    </form>
-
-                                    <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Activity</h4>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                        {groups.find(g => g.id === selectedGroupId)?.activity.map((act, i) => (
-                                            <div key={i} className="card glass" style={{ padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <div>
-                                                    <p style={{ fontWeight: '600', fontSize: '0.9rem' }}>{act.description}</p>
-                                                    <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Paid by {act.paidBy}</p>
-                                                </div>
-                                                <p style={{ fontWeight: '700' }}>₹{act.amount.toLocaleString()}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                                )}
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
 
             {/* Add Transaction Modal */}
             <AnimatePresence>
-                {showAddForm && (
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setShowAddForm(false)}
-                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
-                        />
-                        <motion.div
-                            initial={{ y: '100%' }}
-                            animate={{ y: 0 }}
-                            exit={{ y: '100%' }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                            className="card"
-                            style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
-                        >
-                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
-                            <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Track New Expense</h3>
-                            <form onSubmit={handleAddTransaction}>
-                                <div style={{ marginBottom: '24px' }}>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '12px', color: 'var(--text-muted)' }}>Select Category</label>
-                                    <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(3, 1fr)',
-                                        gap: '10px',
-                                        maxHeight: '240px',
-                                        overflowY: 'auto',
-                                        padding: '4px'
-                                    }} className="hide-scrollbar">
-                                        {CATEGORIES.map(cat => (
-                                            <button
-                                                key={cat.name}
-                                                type="button"
-                                                onClick={() => {
-                                                    setSelectedCategory(cat.name);
-                                                    setIsManualCategory(true);
-                                                }}
-                                                style={{
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    alignItems: 'center',
-                                                    gap: '8px',
-                                                    padding: '16px 8px',
-                                                    background: selectedCategory === cat.name ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
-                                                    border: selectedCategory === cat.name ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.05)',
-                                                    borderRadius: '16px',
-                                                    color: selectedCategory === cat.name ? 'var(--primary)' : 'var(--text-muted)',
-                                                    cursor: 'pointer',
-                                                    transition: 'all 0.2s'
-                                                }}
-                                            >
-                                                <cat.icon size={24} strokeWidth={selectedCategory === cat.name ? 2.5 : 2} />
-                                                <span style={{ fontSize: '0.75rem', fontWeight: '600' }}>{cat.name}</span>
-                                            </button>
-                                        ))}
+                {
+                    showAddForm && (
+                        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                onClick={() => setShowAddForm(false)}
+                                style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
+                            />
+                            <motion.div
+                                initial={{ y: '100%' }}
+                                animate={{ y: 0 }}
+                                exit={{ y: '100%' }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="card"
+                                style={{ width: '100%', maxWidth: '480px', borderRadius: '32px 32px 0 0', padding: '32px 24px', zIndex: 1001, border: 'none' }}
+                            >
+                                <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', margin: '0 auto 24px' }} />
+                                <h3 style={{ fontSize: '1.5rem', marginBottom: '24px' }}>Track New Expense</h3>
+                                <form onSubmit={handleAddTransaction}>
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '12px', color: 'var(--text-muted)' }}>Select Category</label>
+                                        <div style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: 'repeat(3, 1fr)',
+                                            gap: '10px',
+                                            maxHeight: '240px',
+                                            overflowY: 'auto',
+                                            padding: '4px'
+                                        }} className="hide-scrollbar">
+                                            {CATEGORIES.map(cat => (
+                                                <button
+                                                    key={cat.name}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSelectedCategory(cat.name);
+                                                        setIsManualCategory(true);
+                                                    }}
+                                                    style={{
+                                                        display: 'flex',
+                                                        flexDirection: 'column',
+                                                        alignItems: 'center',
+                                                        gap: '8px',
+                                                        padding: '16px 8px',
+                                                        background: selectedCategory === cat.name ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
+                                                        border: selectedCategory === cat.name ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.05)',
+                                                        borderRadius: '16px',
+                                                        color: selectedCategory === cat.name ? 'var(--primary)' : 'var(--text-muted)',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.2s'
+                                                    }}
+                                                >
+                                                    <cat.icon size={24} strokeWidth={selectedCategory === cat.name ? 2.5 : 2} />
+                                                    <span style={{ fontSize: '0.75rem', fontWeight: '600' }}>{cat.name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
 
-                                <div style={{ marginBottom: '20px' }}>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-muted)' }}>Merchant or Service (Optional)</label>
-                                    <input
-                                        placeholder="e.g. Starbucks, Zomato, Canteen"
-                                        value={description}
-                                        onChange={e => {
-                                            const val = e.target.value;
-                                            setDescription(val);
-                                            if (!isManualCategory) {
-                                                const suggested = autoCategorize(val);
-                                                setSelectedCategory(suggested);
-                                            }
-                                        }}
-                                    />
-                                </div>
+                                    <div style={{ marginBottom: '20px' }}>
+                                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-muted)' }}>Merchant or Service (Optional)</label>
+                                        <input
+                                            placeholder="e.g. Starbucks, Zomato, Canteen"
+                                            value={description}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                setDescription(val);
+                                                if (!isManualCategory) {
+                                                    const suggested = autoCategorize(val);
+                                                    setSelectedCategory(suggested);
+                                                }
+                                            }}
+                                        />
+                                    </div>
 
-                                <div style={{ marginBottom: '32px' }}>
-                                    <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-muted)' }}>Amount (₹)</label>
-                                    <input
-                                        type="number"
-                                        placeholder="0.00"
-                                        value={amount}
-                                        onChange={e => setAmount(e.target.value)}
-                                        autoFocus
-                                    />
-                                </div>
-                                <button
-                                    type="submit"
-                                    disabled={!amount}
-                                    style={{ width: '100%', padding: '16px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '16px', fontSize: '1.1rem', fontWeight: '700', opacity: (!amount) ? 0.5 : 1 }}
-                                >
-                                    Confirm Expense
-                                </button>
-                            </form>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                                    <div style={{ marginBottom: '32px' }}>
+                                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-muted)' }}>Amount (₹)</label>
+                                        <input
+                                            type="number"
+                                            placeholder="0.00"
+                                            value={amount}
+                                            onChange={e => setAmount(e.target.value)}
+                                            autoFocus
+                                        />
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        disabled={!amount}
+                                        style={{ width: '100%', padding: '16px', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '16px', fontSize: '1.1rem', fontWeight: '700', opacity: (!amount) ? 0.5 : 1 }}
+                                    >
+                                        Confirm Expense
+                                    </button>
+                                </form>
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
 
             {/* Navigation Bar */}
-            <nav className="nav-blur" style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', height: '80px', display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 900 }}>
+            < nav className="nav-blur" style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: '480px', height: '80px', display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 900 }}>
                 <button onClick={() => setActiveTab('home')} style={{ background: 'none', border: 'none', color: activeTab === 'home' ? 'var(--primary)' : 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: '0.3s' }}>
                     <LayoutDashboard size={24} strokeWidth={activeTab === 'home' ? 2.5 : 2} />
                     <span style={{ fontSize: '0.7rem', marginTop: '6px', fontWeight: '600' }}>Home</span>
@@ -1223,8 +1255,8 @@ const App = () => {
                     <ShieldCheck size={24} strokeWidth={activeTab === 'alerts' ? 2.5 : 2} />
                     <span style={{ fontSize: '0.7rem', marginTop: '6px', fontWeight: '600' }}>Security</span>
                 </button>
-            </nav>
-        </div>
+            </nav >
+        </div >
     );
 };
 

@@ -145,6 +145,11 @@ export function detectAnomaly(
         }
     }
 
+    // 10. Health Category Multiplier (Leniency)
+    if (category === 'Health') {
+        score *= 0.3; // Reduce risk weight significantly for Health
+    }
+
     // Cap score at 100
     const finalScore = Math.min(score, 100);
 
@@ -159,4 +164,54 @@ export function detectAnomaly(
         riskLevel,
         fraudReasons: reasons
     };
+}
+export async function detectAnomalyML(
+    amount: number,
+    description: string,
+    category: string,
+    timestamp: number,
+    recentTransactions: TransactionLike[]
+): Promise<{
+    isSuspicious: boolean,
+    riskScore: number,
+    riskLevel: 'Low' | 'Medium' | 'High',
+    fraudReasons: string[],
+    confidence: number
+}> {
+    try {
+        const response = await fetch('http://localhost:8000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                amount,
+                description,
+                timestamp,
+                category,
+                history: recentTransactions.slice(0, 5).map(t => ({ amount: t.amount, category: t.category, date: t.date }))
+            })
+        });
+
+        if (!response.ok) throw new Error('ML Service unavailable');
+
+        const data = await response.json();
+
+        let riskLevel: 'Low' | 'Medium' | 'High' = 'Low';
+        if (data.risk_score >= 70) riskLevel = 'High';
+        else if (data.risk_score >= 35) riskLevel = 'Medium';
+
+        const reasons = data.reasons.length > 0 ? data.reasons : (data.is_suspicious ? ['ML-identified anomaly'] : []);
+
+        return {
+            isSuspicious: data.is_suspicious,
+            riskScore: data.risk_score,
+            riskLevel,
+            fraudReasons: reasons,
+            confidence: data.confidence
+        };
+    } catch (error) {
+        console.warn('ML Fraud service failed, falling back to rule-based detection', error);
+        // Fallback to existing logic if ML service is down
+        const ruleResult = detectAnomaly(amount, description, recentTransactions);
+        return { ...ruleResult, confidence: 0 };
+    }
 }
