@@ -11,6 +11,7 @@ class FraudModel:
     def __init__(self):
         self.iso_forest = IsolationForest(contamination=0.05, random_state=42)
         self.trained = False
+        self.load_model()
         
     def generate_synthetic_data(self, n_samples=1000):
         # Generate normal spending
@@ -33,8 +34,27 @@ class FraudModel:
     def train_initial(self):
         print("Training initial Isolation Forest model...")
         data = self.generate_synthetic_data()
+        data = self.generate_synthetic_data()
         self.iso_forest.fit(data)
         self.trained = True
+        
+    def save_model(self):
+        try:
+            with open(MODEL_FILE, 'wb') as f:
+                pickle.dump(self.iso_forest, f)
+            print(f"Model saved to {MODEL_FILE}")
+        except Exception as e:
+            print(f"Error saving model: {e}")
+
+    def load_model(self):
+        if os.path.exists(MODEL_FILE):
+            try:
+                with open(MODEL_FILE, 'rb') as f:
+                    self.iso_forest = pickle.load(f)
+                self.trained = True
+                print(f"Model successfully loaded from {MODEL_FILE}")
+            except Exception as e:
+                print(f"Failed to load model: {e}")
         
     def predict(self, amount, hour, category=None, history=None):
         if not self.trained:
